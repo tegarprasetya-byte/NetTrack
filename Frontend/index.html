@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#070b17">
+    <title>NetTrack Realtime Chat</title>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Halaman Autentikasi Split-Card -->
+    <div id="loginScreen" class="login-screen">
+        <div class="auth-container" id="authContainer">
+
+            <!-- Form Pendaftaran -->
+            <div class="form-container sign-up-container">
+                <form id="registerForm" class="auth-form-inner">
+                    <h2>Buat Akun Baru</h2>
+                    <span>Lengkapi data kamu untuk mendaftar</span>
+
+                    <input id="regNameInput" type="text" placeholder="Nama Lengkap" required />
+                    <input id="regUserIdInput" type="text" placeholder="ID Unik (misal: tegar_123)" required />
+                    <input id="regEmailInput" type="email" placeholder="Alamat Email" required />
+                    <input id="regKeyInput" type="password" placeholder="Kunci Buka Pesan (min. 4 karakter)" required />
+                    <input id="regPasswordInput" type="password" placeholder="Password" required />
+                    <input id="regPasswordInput" type="password" placeholder="Validasi Password" required />
+
+                    <button type="submit" class="auth-btn">Daftar Sekarang ➤</button>
+                </form>
+            </div>
+
+            <!-- Form Masuk / Login -->
+            <div class="form-container sign-in-container">
+                <form id="loginForm" class="auth-form-inner">
+                    <h2>Selamat Datang</h2>
+                    <span>Masuk dengan akun NetTrack kamu</span>
+
+                    <input id="loginEmailInput" type="email" placeholder="Alamat Email" required />
+                    <input id="loginPasswordInput" type="password" placeholder="Password" required />
+
+                    <button type="submit" class="auth-btn">Masuk Ke Aplikasi ➤</button>
+                </form>
+            </div>
+
+            <!-- Overlay Panel Bergeser -->
+            <div class="overlay-container">
+                <div class="overlay">
+                    <div class="overlay-panel overlay-left">
+                        <div class="logo">N</div>
+                        <h1>Sudah Punya Akun?</h1>
+                        <p>Silakan masuk untuk melanjutkan obrolan dan simulasi transmisi data kamu.</p>
+                        <button type="button" class="ghost-btn" id="toLoginBtn">Masuk di Sini</button>
+                    </div>
+
+                    <div class="overlay-panel overlay-right">
+                        <div class="logo">N</div>
+                        <h1>Belum Punya Akun?</h1>
+                        <p>Daftar sekarang untuk mulai menguji enkripsi pesan dan geolokasi IP secara real-time!</p>
+                        <button type="button" class="ghost-btn" id="toRegisterBtn">Daftar Akun Baru</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Aplikasi Utama -->
+    <main class="app" id="mainApp" hidden>
+        <aside class="sidebar">
+            <header class="brand">
+                <div class="logo">N</div>
+                <div>
+                    <h1>NetTrack</h1>
+                    <p>Komunikasi Data</p>
+                </div>
+            </header>
+
+            <div class="profile">
+                <div class="avatar" id="myAvatar">T</div>
+                <div class="profile-info">
+                    <strong id="myName">Tegar</strong>
+                    <span id="myIdDisplay">ID: tegar</span>
+                </div>
+                <span class="online-dot"></span>
+            </div>
+
+            <div class="search">
+                <button id="addContactBtn" class="send-button" type="button">➕ Tambah Teman via ID</button>
+                <input id="searchInput" type="text" placeholder="Cari kontak..." aria-label="Cari teman">
+            </div>
+
+            <div class="section-title">DAFTAR PERCAKAPAN</div>
+            <div id="contactList" class="contact-list"></div>
+
+            <div class="sidebar-footer">
+                <span class="online-dot"></span>
+                Server Terhubung
+            </div>
+        </aside>
+
+        <section class="chat-panel">
+    <header class="chat-header">
+        <div class="avatar" id="chatAvatar">?</div>
+        <div class="chat-person">
+            <strong id="chatName">Pilih Kontak</strong>
+            <span id="chatStatus" style="font-size: 12px; font-weight: 500;">⚪ Offline</span>
+        </div>
+    </header>
+
+            <div class="notice-bar">
+                NetTrack: Real-Time Transmission, NRZ-I Encoding & Signal Simulation
+            </div>
+
+            <div id="messages" class="messages" aria-live="polite"></div>
+
+            <!-- Modal Simulator -->
+            <!-- Modal Simulator -->
+<!-- Modal Simulator -->
+<!-- Modal Lihat Pesan -->
+<div id="simModal" class="sim-modal" hidden>
+    <div class="sim-content view-content">
+        <div class="sim-header">
+            <div>
+                <h2>ISI PESAN</h2>
+                <small>Dibuka dengan kunci akunmu</small>
+            </div>
+            <button id="closeSimBtn" class="close-btn" type="button">✕</button>
+        </div>
+
+        <div class="sim-card payload-card">
+            <span class="sim-section-tag">PESAN ASLI</span>
+            <h3 id="simCurrentTextDisplay">-</h3>
+        </div>
+    </div>
+</div>
+<form id="messageForm" class="composer">
+    <input id="messageInput" type="text" placeholder="Tulis pesan (karakter ASCII)..." autocomplete="off" aria-label="Tulis pesan">
+    <button type="submit" class="send-button">Kirim ➤</button>
+</form>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
