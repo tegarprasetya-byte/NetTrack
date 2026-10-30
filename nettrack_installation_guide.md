@@ -54,14 +54,19 @@ CREATE TABLE IF NOT EXISTS messages (
 
 Pastikan susunan folder dan file proyek kamu tersusun seperti ini:
 
-```text
-nettrack-project/
-├── backend/
-│   └── app.py
-└── frontend/
-    ├── index.html
-    ├── style.css
-    └── script.js
+```NETTRACK/
+├── Backend/
+│   ├── app.py
+│   └── requirements.txt
+├── database/
+│   └── schema.sql
+├── Frontend/
+│   ├── crypto-js.min.js
+│   ├── index.html
+│   ├── script.js
+│   └── style.css
+├── .gitignore
+└── nettrack_installation_guide.md
 ```
 
 ---
