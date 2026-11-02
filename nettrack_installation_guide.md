@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS messages (
 
 Pastikan susunan folder dan file proyek kamu tersusun seperti ini:
 
-```NETTRACK/
+```text
+NETTRACK/
 ├── Backend/
 │   ├── app.py
 │   └── requirements.txt
@@ -77,7 +78,7 @@ Buka Terminal / Command Prompt (CMD), lalu jalankan perintah berikut secara beru
 
 ### A. Masuk ke Folder Backend
 ```bash
-cd path/to/nettrack-project/backend
+cd path/to/NETTRACK/Backend
 ```
 
 ### B. Buat & Aktifkan Virtual Environment

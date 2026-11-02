@@ -23,7 +23,7 @@ CREATE TABLE messages (
     sender_id VARCHAR(30) NOT NULL,
     sender_name VARCHAR(100) NOT NULL,
     receiver_id VARCHAR(30) NOT NULL,
-    message TEXT NOT NULL,
+    message LONGBLOB NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_sender (sender_id),
     INDEX idx_receiver (receiver_id),

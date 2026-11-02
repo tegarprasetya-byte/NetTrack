@@ -2,10 +2,10 @@
 const socket = io();
 
 // ==========================================
-// KONSTANTA FRAME
+// KONSTANTA FRAME & SINYAL
 // ==========================================
-const START_BIT = "0";          // bit start
-const END_BIT = "1";            // bit end
+const START_BIT = "0";          // bit start (selalu 0)
+const END_BIT = "1";            // bit end (selalu 1)
 const FRAME_LEN = 10;           // 1 start + 7 data + 1 parity + 1 end
 const MAX_FRAMES_MINI = 100;    // maks frame digambar di bubble chat
 const LOCK_TEXT = "🔒 Pesan ter-encode";
@@ -17,8 +17,8 @@ let myUserAvatar = "";
 let activeChatUserId = "";
 let contacts = [];
 let messagesHistory = [];
-let pendingOpenText = null;   // pesan yang menunggu verifikasi kunci
-let onlineUserIds = new Set(); // Menyimpan ID user yang sedang online
+let pendingOpenMessage = null; // objek pesan yang menunggu verifikasi kunci
+let onlineUserIds = new Set();
 
 // Elemen DOM Utama
 const loginScreen = document.getElementById("loginScreen");
@@ -32,6 +32,7 @@ const messageInput = document.getElementById("messageInput");
 const simModal = document.getElementById("simModal");
 const closeSimBtn = document.getElementById("closeSimBtn");
 
+// Mengamankan teks dari karakter HTML berbahaya (mencegah XSS)
 function escapeHtml(str) {
     return String(str ?? "").replace(/[&<>"']/g, ch => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -43,7 +44,98 @@ function linkify(text) {
 }
 
 // ==========================================
-// 1. LOGIKA SLIDING ANIMATED AUTH (LOGIN & REGISTER)
+// 1. ENCODING TRANSMISI (TEKS -> BINER -> NRZ-I)
+// ==========================================
+
+// Frame per karakter: Start(0) + Data 7-bit + Even Parity + End(1)
+function buildFrames(str) {
+    return Array.from(str).map(ch => {
+        const code = ch.charCodeAt(0) & 0x7F;
+        const data = code.toString(2).padStart(7, "0");
+        const ones = (data.match(/1/g) || []).length;
+        const parity = ones % 2 === 0 ? "0" : "1";
+        return { ch, code, data, parity, bits: START_BIT + data + parity + END_BIT };
+    });
+}
+
+// String bit -> array level sinyal NRZ-I (1 = High, 0 = Low)
+function nrziEncode(bits) {
+    let level = 1; // level awal = High
+    const levels = [];
+    for (const b of bits) {
+        if (b === "1") level = level === 1 ? 0 : 1; // toggle jika bit '1'
+        levels.push(level);                        // tetap jika bit '0'
+    }
+    return levels;
+}
+
+// Teks biasa -> 1 string biner utuh (10 bit per karakter)
+function textToCombinedBinaryString(str) {
+    return buildFrames(str).map(f => f.bits).join("");
+}
+
+// ==========================================
+// 2. VALIDASI & DECODING (NRZ-I -> BINER -> TEKS ASLI)
+// ==========================================
+
+// Cek string bit sebelum di-decode.
+// Return null kalau valid, atau teks alasan kalau tidak valid.
+function validateBitString(bits) {
+    if (!bits) return "Data kosong.";
+    if (!/^[01]+$/.test(bits)) return "Data mengandung karakter selain 0 dan 1.";
+    if (bits.length % FRAME_LEN !== 0) {
+        return `Jumlah bit (${bits.length}) bukan kelipatan ${FRAME_LEN}.`;
+    }
+
+    for (let i = 0; i < bits.length; i += FRAME_LEN) {
+        const frame = bits.slice(i, i + FRAME_LEN);
+        const no = i / FRAME_LEN + 1;
+
+        if (frame[0] !== START_BIT) {
+            return `Frame ke-${no}: bit start harus 0 (ditemukan ${frame[0]}).`;
+        }
+        if (frame[FRAME_LEN - 1] !== END_BIT) {
+            return `Frame ke-${no}: bit end harus 1 (ditemukan ${frame[FRAME_LEN - 1]}).`;
+        }
+
+        // even parity: parity = 1 kalau jumlah bit '1' di 7 bit data ganjil
+        const ones = (frame.slice(1, 8).match(/1/g) || []).length;
+        if (String(ones % 2) !== frame[8]) {
+            return `Frame ke-${no}: parity salah.`;
+        }
+    }
+    return null;
+}
+
+// Decoder NRZ-I: array level sinyal -> teks asli. Throw Error kalau data tidak valid.
+function nrziDecode(levels) {
+    if (!levels || levels.length === 0) throw new Error("Data kosong.");
+
+    // Step A: rekonstruksi sinyal NRZ-I jadi string bit
+    let prevLevel = 1; // level referensi awal = 1
+    let bitString = "";
+    for (let i = 0; i < levels.length; i++) {
+        if (levels[i] !== prevLevel) {
+            bitString += "1"; // ada perubahan level -> bit '1'
+            prevLevel = levels[i];
+        } else {
+            bitString += "0"; // level tetap -> bit '0'
+        }
+    }
+
+    // Step B: validasi (kelipatan 10, start 0, end 1, parity)
+    const err = validateBitString(bitString);
+    if (err) throw new Error(err);
+
+    // Step C: bongkar frame 10-bit, ambil 7 bit data jadi karakter ASCII
+    const framesBits = bitString.match(new RegExp(`.{${FRAME_LEN}}`, "g"));
+    return framesBits
+        .map(bitStr => String.fromCharCode(parseInt(bitStr.slice(1, 8), 2)))
+        .join("");
+}
+
+// ==========================================
+// 3. LOGIKA SLIDING ANIMATED AUTH (LOGIN & REGISTER)
 // ==========================================
 const authContainer = document.getElementById('authContainer');
 const toRegisterBtn = document.getElementById('toRegisterBtn');
@@ -54,31 +146,41 @@ const registerForm = document.getElementById('registerForm');
 toRegisterBtn?.addEventListener('click', () => authContainer?.classList.add("right-panel-active"));
 toLoginBtn?.addEventListener('click', () => authContainer?.classList.remove("right-panel-active"));
 
+// Submit form login
 loginForm?.addEventListener('submit', (e) => {
     e.preventDefault();
-    const email = document.getElementById('loginEmailInput').value.trim();
-    const password = document.getElementById('loginPasswordInput').value;
+    const rawEmail = document.getElementById('loginEmailInput').value.trim();
+    const rawPassword = document.getElementById('loginPasswordInput').value;
+
+    const email = textToCombinedBinaryString(rawEmail);
+    const password = textToCombinedBinaryString(rawPassword);
+
     socket.emit("login_account", { email, password });
 });
 
+// Submit form register
 registerForm?.addEventListener('submit', (e) => {
     e.preventDefault();
     const user_name = document.getElementById('regNameInput').value.trim();
     const user_id = document.getElementById('regUserIdInput').value.trim();
-    const email = document.getElementById('regEmailInput').value.trim();
-    const password = document.getElementById('regPasswordInput').value;
+    const rawEmail = document.getElementById('regEmailInput').value.trim();
+    const rawPassword = document.getElementById('regPasswordInput').value;
     const confirmEl = document.getElementById('regPasswordConfirmInput');
-    const access_key = document.getElementById('regKeyInput').value;
+    const rawAccessKey = document.getElementById('regKeyInput').value;
 
-    // Validasi ulang password
-    if (confirmEl && password !== confirmEl.value) {
+    if (confirmEl && rawPassword !== confirmEl.value) {
         alert("⚠️ Password dan validasi ulang password tidak sama!");
         return;
     }
 
+    const email = textToCombinedBinaryString(rawEmail);
+    const password = textToCombinedBinaryString(rawPassword);
+    const access_key = textToCombinedBinaryString(rawAccessKey);
+
     socket.emit("register_account", { user_id, user_name, email, password, access_key });
 });
 
+// Respon Auth dari Server
 socket.on("auth_response", (data) => {
     if (data.status === "error") {
         alert("⚠️ " + data.message);
@@ -117,11 +219,14 @@ socket.on("auth_response", (data) => {
                         ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                         : '';
 
+                    // Simpan stream biner dari DB & hitung sinyal NRZ-I-nya
+                    const binaryStr = String(msg.message || "");
                     messagesHistory.push({
                         sender_id: msg.sender_id,
                         sender_name: msg.sender_name,
                         receiver_id: msg.receiver_id,
-                        message: msg.message,
+                        binaryMessage: binaryStr,
+                        nrziSignal: nrziEncode(binaryStr),
                         time: timeFormatted
                     });
                 });
@@ -139,10 +244,8 @@ socket.on("auth_response", (data) => {
 
             if (simModal) simModal.hidden = true;
 
-            // Masukkan akun sendiri ke daftar online lokal
             onlineUserIds.add(myUserId);
 
-            // Beri tahu server kalau kita online & minta daftar user lain yang online
             socket.emit("register_online_user", myUserId);
             socket.emit("get_online_users");
 
@@ -154,7 +257,7 @@ socket.on("auth_response", (data) => {
 });
 
 // ==========================================
-// EVENT LISTENER STATUS ONLINE / OFFLINE REALTIME
+// STATUS ONLINE / OFFLINE REALTIME
 // ==========================================
 socket.on("online_users_list", (users) => {
     onlineUserIds = new Set(users);
@@ -183,30 +286,7 @@ function updateChatHeaderStatus() {
 }
 
 // ==========================================
-// 2. ENCODING: FRAME & NRZ-I
-// ==========================================
-function buildFrames(str) {
-    return Array.from(str).map(ch => {
-        const code = ch.charCodeAt(0) & 0x7F;
-        const data = code.toString(2).padStart(7, "0");
-        const ones = (data.match(/1/g) || []).length;
-        const parity = ones % 2 === 0 ? "0" : "1";   // even parity
-        return { ch, code, data, parity, bits: START_BIT + data + parity + END_BIT };
-    });
-}
-
-function nrziEncode(bits) {
-    let level = 1;
-    const levels = [];
-    for (const b of bits) {
-        if (b === "1") level = level === 1 ? 0 : 1;
-        levels.push(level);
-    }
-    return levels;
-}
-
-// ==========================================
-// 3. KONTAK
+// 4. KONTAK
 // ==========================================
 const addContactBtn = document.getElementById("addContactBtn");
 
@@ -278,26 +358,37 @@ function selectContact(userId) {
 }
 
 // ==========================================
-// 4. KIRIM & TERIMA PESAN
+// 5. KIRIM & TERIMA PESAN
 // ==========================================
 function sendPlainText(plainText) {
     if (!activeChatUserId) { alert("Pilih kontak penerima terlebih dahulu!"); return false; }
     if (!/^[\x00-\x7F]+$/.test(plainText)) {
-        alert("Pesan hanya boleh berisi karakter ASCII (tanpa emoji atau huruf spesial), karena tiap karakter dikirim sebagai 7 bit.");
+        alert("Pesan hanya boleh berisi karakter ASCII (tanpa emoji atau huruf spesial).");
         return false;
     }
 
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    const binaryStr = textToCombinedBinaryString(plainText); // teks -> biner
+    const nrziSignal = nrziEncode(binaryStr);                // biner -> sinyal NRZ-I
+
     const msgData = {
         sender_id: myUserId,
         sender_name: myUserName,
         receiver_id: activeChatUserId,
-        message: plainText,
+        message: binaryStr, // dikirim sebagai biner ke server/DB
         time: timeNow
     };
 
-    messagesHistory.push(msgData);
+    messagesHistory.push({
+        sender_id: myUserId,
+        sender_name: myUserName,
+        receiver_id: activeChatUserId,
+        binaryMessage: binaryStr,
+        nrziSignal: nrziSignal,
+        time: timeNow
+    });
+
     const contact = contacts.find(c => c.id === activeChatUserId);
     if (contact) contact.lastMsg = LOCK_TEXT;
 
@@ -314,13 +405,22 @@ messageForm?.addEventListener("submit", function (e) {
     if (sendPlainText(rawMessage)) messageInput.value = "";
 });
 
+// Menerima pesan realtime dari server
 socket.on("receive_message", (data) => {
     if (data.sender_id === myUserId || data.receiver_id !== myUserId) return;
 
-    messagesHistory.push(data);
+    const binaryStr = String(data.message || "");
+
+    messagesHistory.push({
+        sender_id: data.sender_id,
+        sender_name: data.sender_name,
+        receiver_id: data.receiver_id,
+        binaryMessage: binaryStr,
+        nrziSignal: nrziEncode(binaryStr),
+        time: data.time || ''
+    });
 
     const isViewing = data.sender_id === activeChatUserId;
-
     let contact = contacts.find(c => c.id === data.sender_id);
     if (contact) {
         contact.lastMsg = LOCK_TEXT;
@@ -340,7 +440,7 @@ socket.on("message_error", (data) => {
 });
 
 // ==========================================
-// 5. RENDER BUBBLE (SINYAL NRZ-I)
+// 6. RENDER BUBBLE CHAT & CANVAS SINYAL
 // ==========================================
 function renderMessages() {
     if (!messagesContainer) return;
@@ -353,8 +453,9 @@ function renderMessages() {
 
     activeMessages.forEach((msg) => {
         const isSent = msg.sender_id === myUserId;
-        const frames = buildFrames(msg.message || "");
-        const extra = frames.length > MAX_FRAMES_MINI
+        const bitLen = (msg.binaryMessage || "").length;
+        const totalFrames = Math.floor(bitLen / FRAME_LEN);
+        const extra = totalFrames > MAX_FRAMES_MINI
             ? ` · ${MAX_FRAMES_MINI} frame pertama digambar`
             : "";
 
@@ -362,20 +463,14 @@ function renderMessages() {
         msgDiv.className = `message-item ${isSent ? "sent" : "received"}`;
         msgDiv.innerHTML = `
             <div class="message-bubble locked">
-                <div class="lock-head">🔒 Pesan ter-encode · ${frames.length} frame · ${frames.length * FRAME_LEN} bit${extra}</div>
+                <div class="lock-head">🔒 Pesan ter-encode · ${totalFrames} frame · ${bitLen} bit${extra}</div>
                 <div class="signal-scroll mini"><canvas></canvas></div>
-                <div class="signal-legend">
-                    <span class="lg-s">S</span> Start ·
-                    <span class="lg-d">DATA</span> 7 bit ·
-                    <span class="lg-p">P</span> Parity even ·
-                    <span class="lg-e">E</span> End
-                </div>
             </div>
-            <button class="sim-btn" type="button">🔑 Masukkan kunci ${isSent ? "kamu" : escapeHtml(msg.sender_name)} untuk melihat pesan</button>
+            <button class="sim-btn" type="button">🔑 Masukkan kunci untuk melihat pesan</button>
             <span class="time">${escapeHtml(msg.time || '')}</span>
         `;
 
-        drawSignal(msgDiv.querySelector("canvas"), frames);
+        drawSignalFromLevels(msgDiv.querySelector("canvas"), msg.nrziSignal, msg.binaryMessage);
         msgDiv.querySelector(".sim-btn").addEventListener("click", () => openMessage(msg));
 
         messagesContainer.appendChild(msgDiv);
@@ -384,31 +479,42 @@ function renderMessages() {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+// Buka pesan menggunakan kunci
 function openMessage(msg) {
-    const isMine = msg.sender_id === myUserId;
-    const who = isMine ? "akunmu" : `${msg.sender_name} (${msg.sender_id})`;
+    const rawKey = prompt("🔑 Masukkan kunci kamu untuk membuka pesan ini:");
+    if (rawKey === null) return;
 
-    const key = prompt(`🔑 Masukkan kunci ${who} untuk membuka pesan ini:`);
-    if (key === null) return;
+    const keyBin = textToCombinedBinaryString(rawKey); // kunci di-encode ke biner
 
-    pendingOpenText = msg.message;
-    socket.emit("verify_key", { key, owner_id: msg.sender_id });
+    pendingOpenMessage = msg;
+    socket.emit("verify_key", { key: keyBin, owner_id: myUserId });
 }
 
+// Handler respon kunci dari server
 socket.on("key_response", (data) => {
-    if (data.ok && pendingOpenText !== null) {
-        const text = pendingOpenText;
-        pendingOpenText = null;
-        showMessageText(text);
+    if (data.ok && pendingOpenMessage !== null) {
+        const msg = pendingOpenMessage;
+        pendingOpenMessage = null;
+
+        // Validasi data asli dari DB dulu (kelipatan 10, start 0, end 1, parity)
+        const err = validateBitString(msg.binaryMessage);
+        if (err) {
+            alert("⚠️ Pesan tidak valid: " + err);
+            return;
+        }
+
+        // Decode NRZ-I -> teks asli
+        try {
+            showMessageText(nrziDecode(msg.nrziSignal));
+        } catch (e) {
+            alert("⚠️ Pesan tidak valid: " + e.message);
+        }
     } else {
-        pendingOpenText = null;
+        pendingOpenMessage = null;
         alert("❌ " + (data.message || "Kunci salah, pesan tidak bisa dibuka."));
     }
 });
 
-// ==========================================
-// 6. TAMPILKAN TEKS PESAN
-// ==========================================
 function showMessageText(text) {
     if (!simModal) return;
     const displayElem = document.getElementById("simCurrentTextDisplay");
@@ -425,20 +531,16 @@ closeSimBtn?.addEventListener("click", () => {
 });
 
 // ==========================================
-// 7. GAMBAR SINYAL NRZ-I
+// 7. RENDERING CANVAS NRZ-I DARI LEVEL
 // ==========================================
-function drawSignal(canvas, frames) {
-    if (!canvas) return;
-
-    const shown = frames.slice(0, MAX_FRAMES_MINI);
-    const bits = shown.map(f => f.bits).join("");
-    const levels = nrziEncode(bits);
+function drawSignalFromLevels(canvas, levels, bits) {
+    if (!canvas || !levels || levels.length === 0) return;
 
     const bitW = 14;
     const LEFT = 10, RIGHT = 10, H = 100;
-    const yTag = 13;
     const yHigh = 44, yLow = 86;
-    const cssW = Math.ceil(LEFT + bits.length * bitW + RIGHT);
+    const drawLen = Math.min(levels.length, MAX_FRAMES_MINI * FRAME_LEN);
+    const cssW = Math.ceil(LEFT + drawLen * bitW + RIGHT);
 
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (cssW * dpr > 16000) dpr = 1;
@@ -451,61 +553,28 @@ function drawSignal(canvas, frames) {
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, H);
-    if (!bits) return;
 
-    const fields = [
-        { from: 0, len: 1, tag: "S",          color: "#d6aa5c", tint: "rgba(214,170,92,0.10)" },
-        { from: 1, len: 7, tag: "DATA 7 bit", color: "#94a3b8", tint: null },
-        { from: 8, len: 1, tag: "P",          color: "#9d8fd0", tint: "rgba(157,143,208,0.12)" },
-        { from: 9, len: 1, tag: "E",          color: "#d6aa5c", tint: "rgba(214,170,92,0.10)" }
-    ];
+    const totalFrames = Math.min(Math.floor(levels.length / FRAME_LEN), MAX_FRAMES_MINI);
 
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    shown.forEach((f, fi) => {
+    // Garis pembatas frame
+    for (let fi = 0; fi < totalFrames; fi++) {
         const fx = LEFT + fi * FRAME_LEN * bitW;
-
-        fields.forEach(fd => {
-            const x0 = fx + fd.from * bitW;
-            const w = fd.len * bitW;
-
-            if (fd.tint) {
-                ctx.fillStyle = fd.tint;
-                ctx.fillRect(x0, 0, w, H);
-            }
-
-            ctx.fillStyle = fd.color;
-            ctx.font = "700 10px 'JetBrains Mono', monospace";
-            ctx.fillText(fd.tag, x0 + w / 2, yTag);
-
-            if (fd.from > 0) {
-                ctx.strokeStyle = "rgba(255,255,255,0.14)";
-                ctx.lineWidth = 1;
-                ctx.setLineDash([2, 3]);
-                ctx.beginPath();
-                ctx.moveTo(x0, 0);
-                ctx.lineTo(x0, H);
-                ctx.stroke();
-                ctx.setLineDash([]);
-            }
-        });
-
         ctx.strokeStyle = "rgba(255,255,255,0.30)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(fx, 0);
         ctx.lineTo(fx, H);
         ctx.stroke();
-    });
+    }
 
-    const xEnd = LEFT + bits.length * bitW;
+    const xEnd = LEFT + drawLen * bitW;
     ctx.strokeStyle = "rgba(255,255,255,0.30)";
     ctx.beginPath();
     ctx.moveTo(xEnd, 0);
     ctx.lineTo(xEnd, H);
     ctx.stroke();
 
+    // Garis bantu level High/Low
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.setLineDash([4, 4]);
     [yHigh, yLow].forEach(y => {
@@ -516,6 +585,7 @@ function drawSignal(canvas, frames) {
     });
     ctx.setLineDash([]);
 
+    // Garis sinyal NRZ-I (hijau)
     ctx.strokeStyle = "#6bb08f";
     ctx.lineWidth = 2.5;
     ctx.lineJoin = "round";
@@ -526,14 +596,15 @@ function drawSignal(canvas, frames) {
     ctx.moveTo(x - 6, curY);
     ctx.lineTo(x, curY);
 
-    for (let i = 0; i < levels.length; i++) {
-        const ny = levels[i] === 1 ? yHigh : yLow;
+    const limitLevels = levels.slice(0, drawLen);
+    for (let i = 0; i < limitLevels.length; i++) {
+        const ny = limitLevels[i] === 1 ? yHigh : yLow;
         if (ny !== curY) {
-            ctx.lineTo(x, ny);
+            ctx.lineTo(x, ny); // transisi vertikal
             curY = ny;
         }
         x += bitW;
-        ctx.lineTo(x, curY);
+        ctx.lineTo(x, curY);   // garis horizontal 1 bit
     }
     ctx.stroke();
 }
